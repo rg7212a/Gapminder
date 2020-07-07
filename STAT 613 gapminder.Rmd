@@ -1,0 +1,316 @@
+---
+title: "STAT 613 Gapminder"
+author: "Rabya Ghafoor"
+date: "3/21/2020"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+library (tidyverse)
+library (modelr)
+library(gapminder)
+library(purrr)
+```
+
+```{r}
+#Reading in fileUrls and var_names
+fileUrls <- c("https://docs.google.com/spreadsheet/pub?key=0AkBd6lyS3EmpdHo5S0J6ekhVOF9QaVhod05QSGV4T3c&output=csv",
+              "https://docs.google.com/spreadsheet/pub?key=phAwcNAVuyj2tPLxKvvnNPA&output=csv",
+              "https://docs.google.com/spreadsheet/pub?key=tSUr_yZVbM6a3AGJEq_Z2Pw&output=csv",
+              "https://docs.google.com/spreadsheet/pub?key=0ArfEDsV3bBwCdHBzUVVSMDlTX1ZCUnNJQ3ZFdkFXVFE&output=csv",
+              "https://docs.google.com/spreadsheet/pub?key=phAwcNAVuyj0XOoBL_n5tAQ&output=csv")
+
+var_names <- c("GDP","life_expectancy", "alt_GDP", "blood press", "population")
+```
+
+1.
+
+```{r}
+#Received help from C'Asha
+get_clean <- function(url_in, var_name){
+  df_files <- read_csv(url_in)
+  names(df_files)[1] = "country"
+  df_pivot <- df_files %>% pivot_longer(cols = -c("country"), names_to = "year", values_to = var_name, values_drop_na = T)
+
+}
+
+out1 <- get_clean(fileUrls[1], var_names[1])
+head(out1)
+
+```
+
+
+```{r map2}
+#Using map function to apply files and var_names to entire data set.
+all_data <- map2( .x = fileUrls,  .y = var_names, .f = get_clean)
+head(all_data)
+```
+
+
+2.
+#Recieved help from Erin
+
+```{r join outputs, message = FALSE}
+#Joining all list of data frames
+joined_data <- Reduce(full_join, all_data)
+new_df <- tbl_df(joined_data)
+new_df
+```
+
+3.
+
+```{r}
+#Adapted code by Erin
+library(countrycode)
+continent <- countrycode(sourcevar = joined_data[[1]], origin = "country.name", destination = "region")
+
+new_gapminder <- joined_data %>%
+  mutate(continet = continent) %>%
+  mutate(continent= case_when(
+    country == "Akrotiri and Dhekelia" ~ "South-Eastern Asia",
+    country == "Central African Rep." ~ "Middle Africa",
+    country == "Channel Islands" ~ "North America",
+    country == "Christmas Island" ~ "Australia and New Zealand",
+    country == "Cocos Island" ~ "Australia and New Zealand", 
+    country == "Czechoslovakia" ~ "Eastern Europe",
+    country == "East Germany" ~ "Western Europe",
+    country == "Eritrea and Ethiopia" ~ "Eastern Africa",
+    country == "Kosovo" ~ "Eastern Europe",
+    country == "North Yemen (former)" ~ "South-Eastern Asia", 
+    country == "Serbia amd Montenegro" ~ "Eastern Europe",
+    country == "South Yemen (former)" ~ "South-Eastern Asia",
+    country == "St. Martin" ~ "Caribbean",
+    country == "Yuogoslavia" ~ "Eastern Europe",
+    TRUE ~ continent)) %>%
+  select(continent, country, year, everything()) %>%
+  arrange(continent, country, year)
+
+tbl_df(new_gapminder)
+```
+    
+```{r}
+#Remove NA values and fill in GDP and population.
+new_gapminder %>% fill(GDP) %>% fill(population)
+new_gapminder.omit <- new_gapminder %>% na.omit()
+```
+
+4.
+```{r}
+library(gganimate)
+library(ggplot2)
+library(readr)
+library(plotly)
+```
+
+
+
+
+```{r}
+#Adapted from #Source: https://towardsdatascience.com/animating-your-data-visualizations-like-a-boss-using-r-f94ae20843e3
+#Animated graph of lifeExp ~ GDP over time. 
+p <- new_gapminder %>%
+  plot_ly(
+    x = ~GDP, 
+    y = ~life_expectancy, 
+    size = ~population, 
+    color = ~continent, 
+    frame = ~year, 
+    text = ~country, 
+    hoverinfo = "text",
+    type = 'scatter',
+    mode = 'markers'
+  ) %>%
+  layout(
+    xaxis = list(
+      type = "log"
+    )
+  )
+
+p
+```
+
+
+```{r}
+library(tidyverse)
+library(broom)
+library(gapminder)
+library(stringr)
+```
+
+Part 2
+
+
+```{r}
+#Adapted from R for Data Science Chapter 25 many models 
+by_country <- new_gapminder.omit %>%
+    group_by(country, continent) %>%
+    nest()
+by_country %>% head 
+```
+
+
+```{r}
+country_model <- function(df) {
+    lm(life_expectancy ~ GDP, data = df)
+}
+```
+
+
+```{r}
+#Apply function to entire data frame
+by_country <- by_country %>%
+    mutate(model = map(.x = data, .f = country_model))
+by_country %>% head()
+```
+
+```{r}
+#Applying residuals and predictions to list of data frames. 
+by_country <- by_country %>%
+    mutate(
+        preds  = map2(.x = data, .y = model, .f = add_predictions),
+        resids = map2(.x = data, .y = model, .f = add_residuals)
+    )
+by_country %>% head()
+```
+
+
+```{r}
+#Unnesting the list of dataframes
+
+preds <- unnest(data = by_country, preds)
+preds %>% head()
+resids <- unnest(data = by_country, resids)
+resids %>% head()
+```
+
+```{r}
+#Plot residual graph for each continent
+resids %>%
+    ggplot(aes(GDP, resid, group = country)) +
+    geom_line(alpha = 0.4) + 
+    facet_wrap(~ continent)
+```
+
+```{r}
+glance <- by_country %>% 
+    mutate(glance = map(model, broom::glance)) %>% 
+    unnest(glance, .drop = TRUE) %>%
+    arrange(r.squared) 
+glance %>% head()
+```
+
+The continent Africa and its countries do not fit the model well as they have the lowest r sqaured values using the broom:: glance () method.
+
+Part 3.
+
+#Source: https://rstudio-pubs-static.s3.amazonaws.com/216759_35331865789e447c866f616010b23bdd.html
+
+
+```{r}
+lifeExp ~ poly(year, 2)
+```
+
+```{r}
+#Graph of lifeExpectancy vs year of those countries with an r.sqaured values less than 0.25
+library(broom)
+by_country <- gapminder %>%
+  group_by(country, continent) %>%
+  nest()
+
+country_model <- function(df) {
+  lm(lifeExp ~ year, data = df)
+}
+
+by_country <- by_country %>%
+  mutate(model = map(data, country_model))
+by_country
+
+glance <- by_country %>%
+  mutate(glance = map(model, broom::glance)) %>%
+  unnest(glance, .drop = TRUE)
+
+mod_t <- filter(glance, r.squared < 0.25)
+
+gapminder %>%
+  semi_join(mod_t, by = "country")%>%
+  ggplot(aes(year, lifeExp, colour = country)) +
+    geom_line()
+```
+
+
+
+```{r}
+quad_mod <- function(df){
+  lm(data = df, lifeExp ~ year + poly(year, 2))
+}
+quad <- gapminder %>%
+  #Transform mean of year to 0.
+  mutate(year = year - mean (year)) %>%
+  group_by(country) %>%
+  nest() %>%
+  mutate(model = map(data, quad_mod))
+quad
+
+quad <- quad %>% mutate(resids = map2(data, model, add_residuals))
+unnest(quad, resids)
+```
+
+```{r}
+glance <- by_country %>%
+    mutate(glance = map(model, broom::glance)) %>%
+    unnest(glance, .drop = TRUE) 
+```
+
+According to the table we can observe that the r.squared improved considerably with a quadratic model.
+
+To visualize countries that do not fit the model well we can use r.squared <= 0.8 as a limit to visualize “low” model. fits.
+
+
+```{r}
+#Received help from C'Asha
+#Plotting residuals graph of countries that do not fit the model.
+glance2 <- glance %>% filter(r.squared < 0.25) %>% mutate(resids = map2(data, model, add_residuals))
+unnest(glance2, resids) %>% ggplot(aes(year, resid, color = country))+
+  geom_line(alpha = 1 / 3)
+```
+The deviations from the model may be due to  impact of the Vietnam war in through the 1970s in Cambodia and the impact of Rwanda genocide and the lack of access to basic healthcare resources. In mapping out these outliers we can conclude that the quadratic does a better job in fitting the minor fluctuations in the data and presenting outliers that significantly deviates from the normal pattern.
+
+```{r}
+bg_rqs <- filter(glance, country == "Belgium")
+bg_rqs
+```
+#summary on Belgium
+```{r}
+bg <- filter(gapminder, country == "Belgium")
+bg %>% 
+  ggplot(aes(year, lifeExp)) + 
+  geom_line() + 
+  ggtitle("Full data = ")
+
+bg_mod <- lm(lifeExp ~ year, data = bg)
+bg %>% 
+  add_predictions(bg_mod) %>%
+  ggplot(aes(year, pred)) + 
+  geom_line() + 
+  ggtitle("Linear trend + ")
+
+bg %>% 
+  add_residuals(bg_mod) %>% 
+  ggplot(aes(year, resid)) + 
+  geom_hline(yintercept = 0, colour = "white", size = 3) + 
+  geom_line() + 
+  ggtitle("Remaining pattern")
+```
+In comparison to the countries within the African continent. Belgium appears to fit the model well with a positive linear relationship between lifeExp and year. The r.squared value for Belgium of 0.9945406 is relatively high and consistent with our conclusion of Belgium being one of the countries that maps out on to this model very well.
+
+
+
+Part 4.
+
+
+```{r}
+github <-  "https://github.com/rg7212a?tab=repositories"
+```
+
